@@ -11,7 +11,7 @@ optdepends=('plexamp-appimage: Plexamp to patch'
             'plexamp-beta-appimage: Plexamp beta to patch'
             'ollama: local LLM server')
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('2ccbe10ec8fd5202bc1e9ba078191f640486c8fe302a09c4fffe40f7e87af81c')
 
 package() {
   cd "$pkgname-$pkgver"

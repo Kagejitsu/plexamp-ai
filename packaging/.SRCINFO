@@ -1,0 +1,16 @@
+pkgbase = plexamp-ai
+	pkgdesc = Run Plexamp's Sonic Sage AI playlists on a local OpenAI-compatible LLM (Lemonade, Ollama, llama.cpp)
+	pkgver = 0.1.0
+	pkgrel = 1
+	url = https://github.com/Kagejitsu/plexamp-ai
+	arch = any
+	license = MIT
+	depends = python
+	depends = util-linux
+	optdepends = plexamp-appimage: Plexamp to patch
+	optdepends = plexamp-beta-appimage: Plexamp beta to patch
+	optdepends = ollama: local LLM server
+	source = plexamp-ai-0.1.0.tar.gz::https://github.com/Kagejitsu/plexamp-ai/archive/refs/tags/v0.1.0.tar.gz
+	sha256sums = 2ccbe10ec8fd5202bc1e9ba078191f640486c8fe302a09c4fffe40f7e87af81c
+
+pkgname = plexamp-ai
