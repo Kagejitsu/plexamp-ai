@@ -1,0 +1,24 @@
+#!/bin/bash
+# pacman PostTransaction hook: re-patch Plexamp for every user who has used
+# plexamp-ai (i.e. has a patched copy). The patcher always runs AS THAT USER,
+# never as root, and any failure becomes a loud warning with exit 0 so a
+# Plexamp update that breaks the patch never fails the pacman transaction.
+
+warn() {
+    printf '\e[1;33m==> WARNING:\e[0m plexamp-ai (%s): %s\n' "$1" "$2"
+    printf '    Sonic Sage will not use the local LLM until this is fixed.\n'
+    [ -n "$3" ] && printf '%s\n' "$3" | sed 's/^/    | /'
+}
+
+getent passwd | while IFS=: read -r name _ uid _ _ home _; do
+    [ "$uid" -ge 1000 ] && [ "$uid" -lt 60000 ] || continue
+    [ -f "$home/.local/share/plexamp-ai/app/.patched-from" ] || continue
+
+    if out=$(runuser -u "$name" -- env -i HOME="$home" USER="$name" \
+             LOGNAME="$name" PATH=/usr/bin:/bin plexamp-ai-patch 2>&1); then
+        printf '%s\n' "$out" | sed "s/^/  [$name] /"
+    else
+        warn "$name" "re-patch FAILED" "$out"
+    fi
+done
+exit 0

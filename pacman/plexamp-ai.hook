@@ -1,0 +1,14 @@
+# Re-patch every user's AI-enabled Plexamp copy after Plexamp or plexamp-ai
+# changes. Never blocks the transaction: failures print a WARNING instead.
+[Trigger]
+Operation = Install
+Operation = Upgrade
+Type = Package
+Target = plexamp-appimage
+Target = plexamp-beta-appimage
+Target = plexamp-ai
+
+[Action]
+Description = Re-patching Plexamp for local AI (plexamp-ai)...
+When = PostTransaction
+Exec = /usr/share/libalpm/scripts/plexamp-ai

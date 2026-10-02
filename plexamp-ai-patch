@@ -1,0 +1,210 @@
+#!/usr/bin/env python3
+"""Build a copy of Plexamp whose AI features (Sonic Sage) talk to a local LLM.
+
+Works with any OpenAI-compatible server, e.g. Lemonade (the default) or Ollama:
+
+    plexamp-ai-patch --base http://localhost:11434/v1 --model gemma4:26b
+
+Extracts the Plexamp AppImage into ~/.local/share/plexamp-ai/app, then patches
+index.js inside resources/app.asar:
+
+  * https://api.openai.com/v1/{models,chat/completions}
+      -> $PLEXAMP_AI_BASE, else the baked-in --base
+  * every `gptModel="gpt-..."` assignment
+      -> $PLEXAMP_AI_MODEL, else the baked-in --model
+
+The env vars are read at runtime (the renderer has nodeIntegration), so the
+model can be swapped without re-patching. DALL-E artwork is left pointing at
+OpenAI on purpose: local servers do not return `response_format: "url"`.
+
+Re-running is cheap: a stamp records which AppImage, patcher version, --base and
+--model produced the copy, and the work is skipped while all of them match (or
+until --force). Omitted --base/--model reuse the previous run's values, so the
+launcher and the pacman hook never reset them. The installed Plexamp package is
+never modified.
+"""
+
+import argparse
+import hashlib
+import json
+import os
+import re
+import shutil
+import struct
+import subprocess
+import sys
+from pathlib import Path
+
+__version__ = "0.1.0"
+
+SRC = Path(os.environ.get("PLEXAMP_APPIMAGE", "/usr/bin/Plexamp.AppImage"))
+DEST = Path.home() / ".local/share/plexamp-ai/app"
+STAMP = DEST / ".patched-from"
+
+DEFAULT_BASE = "http://localhost:13305/api/v1"
+DEFAULT_MODEL = "Gemma-4-26B-A4B-it-GGUF"
+
+BLOCK = 4 * 1024 * 1024  # asar integrity block size
+
+
+# --- asar ------------------------------------------------------------------
+# Layout: [u32 4][u32 header_pickle_size][u32 payload][u32 json_len][json+pad]
+# then file bodies; each entry's "offset" is relative to the end of the header.
+
+def read_asar(path):
+    data = path.read_bytes()
+    _, header_size, _, json_len = struct.unpack_from("<IIII", data, 0)
+    header = json.loads(data[16:16 + json_len])
+    return header, data[8 + header_size:]
+
+
+def write_asar(path, header, body):
+    js = json.dumps(header, separators=(",", ":")).encode()
+    pad = (4 - len(js) % 4) % 4
+    pickle = struct.pack("<II", 4 + len(js) + pad, len(js)) + js + b"\0" * pad
+    path.write_bytes(struct.pack("<II", 4, len(pickle)) + pickle + body)
+
+
+def walk_files(node):
+    for entry in node.get("files", {}).values():
+        if "files" in entry:
+            yield from walk_files(entry)
+        elif "offset" in entry:  # skip unpacked files and symlinks
+            yield entry
+
+
+def file_bytes(header, body, name):
+    e = header["files"][name]
+    return body[int(e["offset"]):int(e["offset"]) + e["size"]]
+
+
+def integrity(content):
+    return {
+        "algorithm": "SHA256",
+        "hash": hashlib.sha256(content).hexdigest(),
+        "blockSize": BLOCK,
+        "blocks": [hashlib.sha256(content[i:i + BLOCK]).hexdigest()
+                   for i in range(0, max(len(content), 1), BLOCK)],
+    }
+
+
+def replace_file(header, body, name, new):
+    """Swap one top-level file's contents, shifting every later offset."""
+    entry = header["files"][name]
+    start, old_size = int(entry["offset"]), entry["size"]
+    delta = len(new) - old_size
+    for e in walk_files(header):
+        if int(e["offset"]) > start:
+            e["offset"] = str(int(e["offset"]) + delta)
+    entry["size"] = len(new)
+    if "integrity" in entry:
+        entry["integrity"] = integrity(new)
+    return body[:start] + new + body[start + old_size:]
+
+
+# --- the patch ---------------------------------------------------------------
+
+def patch_index(js, base, model):
+    env = 'typeof process!=="undefined"&&process.env.'
+    env_base = f"(({env}PLEXAMP_AI_BASE)||{json.dumps(base)})"
+    env_model = f"(({env}PLEXAMP_AI_MODEL)||{json.dumps(model)})"
+
+    # Each pattern must match exactly as often as expected, so a Plexamp update
+    # that reshapes this code fails loudly instead of half-patching.
+    edits = [
+        ('"https://api.openai.com/v1/models"', f'{env_base}+"/models"', 1),
+        ('"https://api.openai.com/v1/chat/completions"',
+         f'{env_base}+"/chat/completions"', 1),
+    ]
+    for old, new, want in edits:
+        got = js.count(old)
+        if got != want:
+            sys.exit(f"plexamp-ai-patch: expected {want}x {old}, found {got}; "
+                     "this Plexamp version is not supported yet")
+        js = js.replace(old, new)
+
+    js, n = re.subn(r'gptModel="gpt-[^"]*"', f"gptModel={env_model}", js)
+    if n != 5:  # constructor default + 4 branches of fetchBestAlgorithm
+        sys.exit(f"plexamp-ai-patch: expected 5 gptModel assignments, found {n}; "
+                 "this Plexamp version is not supported yet")
+    return js
+
+
+# --- main ------------------------------------------------------------------
+
+def source_id():
+    st = SRC.stat()
+    return f"{st.st_size}:{int(st.st_mtime)}"
+
+
+def read_stamp():
+    try:
+        return json.loads(STAMP.read_text())
+    except (OSError, ValueError):
+        return {}
+
+
+def main():
+    ap = argparse.ArgumentParser(
+        description="Patch Plexamp's Sonic Sage to use a local OpenAI-compatible LLM.")
+    ap.add_argument("--base",
+                    help=f"OpenAI-compatible base URL (default: last used, "
+                         f"else {DEFAULT_BASE})")
+    ap.add_argument("--model",
+                    help=f"model id (default: last used, else {DEFAULT_MODEL})")
+    ap.add_argument("--force", action="store_true", help="re-patch even if current")
+    ap.add_argument("--status", action="store_true",
+                    help="print the current patch settings and exit")
+    ap.add_argument("-q", "--quiet", action="store_true")
+    ap.add_argument("--version", action="version", version=__version__)
+    args = ap.parse_args()
+    say = (lambda *a: None) if args.quiet else print
+
+    prev = read_stamp()
+    if args.status:
+        print(json.dumps(prev, indent=2) if prev else "not patched yet")
+        return
+
+    if not SRC.exists():
+        sys.exit(f"plexamp-ai-patch: {SRC} not found; install plexamp-appimage "
+                 "or set PLEXAMP_APPIMAGE")
+
+    args.base = args.base or prev.get("base") or DEFAULT_BASE
+    args.model = args.model or prev.get("model") or DEFAULT_MODEL
+    stamp = {"source": source_id(), "patcher": __version__,
+             "base": args.base, "model": args.model}
+    if not args.force and prev == stamp:
+        say(f"Up to date: {DEST}")
+        return
+
+    tmp = DEST.with_name(DEST.name + ".tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+
+    say(f"Extracting {SRC} ...")
+    subprocess.run([str(SRC), "--appimage-extract"], cwd=tmp, check=True,
+                   stdout=subprocess.DEVNULL)
+    root = tmp / "squashfs-root"
+
+    asar = root / "resources/app.asar"
+    header, body = read_asar(asar)
+    say("Patching index.js ...")
+    new = patch_index(file_bytes(header, body, "index.js").decode(),
+                      args.base, args.model).encode()
+    body = replace_file(header, body, "index.js", new)
+    write_asar(asar, header, body)
+
+    # Sanity check: re-read and confirm the patched file round-trips.
+    h2, b2 = read_asar(asar)
+    assert file_bytes(h2, b2, "index.js") == new
+    version = json.loads(file_bytes(h2, b2, "package.json"))["version"]
+
+    (root / STAMP.name).write_text(json.dumps(stamp) + "\n")
+    shutil.rmtree(DEST, ignore_errors=True)
+    root.rename(DEST)
+    tmp.rmdir()
+    say(f"Plexamp {version} patched -> {DEST}\n  base  {args.base}\n  model {args.model}")
+
+
+if __name__ == "__main__":
+    main()

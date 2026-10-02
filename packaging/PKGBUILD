@@ -1,0 +1,24 @@
+# Maintainer: Kagejitsu <2914681+Kagejitsu@users.noreply.github.com>
+pkgname=plexamp-ai
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Run Plexamp's Sonic Sage AI playlists on a local OpenAI-compatible LLM (Lemonade, Ollama, llama.cpp)"
+arch=('any')
+url="https://github.com/Kagejitsu/plexamp-ai"
+license=('MIT')
+depends=('python' 'util-linux')
+optdepends=('plexamp-appimage: Plexamp to patch'
+            'plexamp-beta-appimage: Plexamp beta to patch'
+            'ollama: local LLM server')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$pkgname-$pkgver"
+  install -Dm755 plexamp-ai plexamp-ai-patch -t "$pkgdir/usr/bin/"
+  install -Dm644 plexamp-ai.desktop -t "$pkgdir/usr/share/applications/"
+  install -Dm644 pacman/plexamp-ai.hook -t "$pkgdir/usr/share/libalpm/hooks/"
+  install -Dm755 pacman/plexamp-ai-hook "$pkgdir/usr/share/libalpm/scripts/plexamp-ai"
+  install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -Dm644 LICENSE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}

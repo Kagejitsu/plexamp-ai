@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Plexamp AI
+Comment=Plexamp with Sonic Sage on a local LLM
+Exec=plexamp-ai
+Terminal=false
+Type=Application
+Icon=plexamp
+StartupWMClass=plexamp
+Categories=AudioVideo;Audio;Player;

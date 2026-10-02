@@ -1,0 +1,11 @@
+#!/bin/bash
+# Launch the AI-patched Plexamp, (re-)patching first if needed: first run, the
+# Plexamp package was upgraded, or plexamp-ai itself was. Arguments are passed
+# to Plexamp. Override at runtime with PLEXAMP_AI_MODEL=... / PLEXAMP_AI_BASE=...
+set -e
+plexamp-ai-patch -q
+APPDIR="$HOME/.local/share/plexamp-ai/app"
+# AppRun locates itself via $1, which breaks when $1 is a flag; tell it.
+export APPDIR
+APPIMAGELAUNCHER_DISABLE=1 DESKTOPINTEGRATION=0 \
+    exec "$APPDIR/AppRun" --disable-seccomp-filter-sandbox "$@"
